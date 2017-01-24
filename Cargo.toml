@@ -1,0 +1,8 @@
+[package]
+name = "rwm"
+version = "0.0.0"
+description = "A tiny window manager written in Rust"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+
+[dependencies]
+x11 = "*"
