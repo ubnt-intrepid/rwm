@@ -11,8 +11,8 @@ mod rwm;
 
 fn main() {
   env_logger::init().unwrap();
-  match rwm::run() {
-    Ok(()) => (),
-    Err(mesg) => error!("error: {}", mesg),
+
+  if let Err(mesg) = rwm::run() {
+    error!("error: {}", mesg);
   }
 }

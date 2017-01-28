@@ -90,32 +90,23 @@ impl Env {
   }
 
   fn scan_wins(&mut self) -> Result<(), &'static str> {
-    unsafe {
-      let mut wins: *mut xlib::Window = null_mut();
-      let mut nwins = 0;
-      let mut w1: xlib::Window = 0;
-      let mut w2: xlib::Window = 0;
-      xlib::XQueryTree(self.display,
-                       self.root,
-                       &mut w1,
-                       &mut w2,
-                       &mut wins,
-                       &mut nwins);
-
-      for &win in ::std::slice::from_raw_parts(wins, nwins as usize) {
-        let mut attr = zeroed::<xlib::XWindowAttributes>();
-        xlib::XGetWindowAttributes(self.display, win, &mut attr as *mut xlib::XWindowAttributes);
-        if attr.override_redirect != 0 {
-          continue;
-        }
-        self.manage(win, true);
+    for win in self.query_tree(self.root) {
+      let attr = self.get_attributes(win);
+      if attr.override_redirect != 0 {
+        continue;
       }
-
-      xlib::XFree(wins as *mut c_void);
+      self.manage(win, true);
     }
 
-    info!("scan_wins: number of entries = {}", self.clients.len());
+    trace!("scan_wins: number of entries = {}", self.clients.len());
     Ok(())
+  }
+
+  fn frame_of(&self, client: xlib::Window) -> Option<xlib::Window> {
+    self.clients
+      .iter()
+      .find(|&ent| ent.window == client)
+      .map(|ref ent| ent.frame)
   }
 
   fn next_event(&mut self) -> Event {
@@ -139,19 +130,7 @@ impl Env {
       return;
     }
 
-    let mut root: xlib::Window = 0;
-    let (mut x, mut y, mut width, mut height, mut border_width, mut depth) = (0, 0, 0, 0, 0, 0);
-    unsafe {
-      xlib::XGetGeometry(self.display,
-                         win,
-                         &mut root,
-                         &mut x,
-                         &mut y,
-                         &mut width,
-                         &mut height,
-                         &mut border_width,
-                         &mut depth);
-    }
+    let (_, x, y, width, height, ..) = self.get_geometry(win);
 
     let width = ::std::cmp::max(width, 100);
     let height = ::std::cmp::max(height, 100);
@@ -211,29 +190,9 @@ impl Env {
     }
   }
 
-  fn frame_of(&self, client: xlib::Window) -> Option<xlib::Window> {
-    self.clients
-      .iter()
-      .find(|&ent| ent.window == client)
-      .map(|ref ent| ent.frame)
-  }
-
   fn configure(&mut self, ev: xlib::XConfigureRequestEvent) {
     if let Some(frame) = self.frame_of(ev.window) {
-      let client = ev.window;
-      let mut root: xlib::Window = 0;
-      let (mut curx, mut cury, mut curwid, mut curht, mut curbd, mut curdepth) = (0, 0, 0, 0, 0, 0);
-      unsafe {
-        xlib::XGetGeometry(self.display,
-                           client,
-                           &mut root,
-                           &mut curx,
-                           &mut cury,
-                           &mut curwid,
-                           &mut curht,
-                           &mut curbd,
-                           &mut curdepth);
-      }
+      let (_, curx, cury, curwid, curht, ..) = self.get_geometry(ev.window);
       unsafe {
         xlib::XMoveResizeWindow(self.display,
                                 frame,
@@ -241,8 +200,52 @@ impl Env {
                                 cury - TITLE_HEIGHT as i32,
                                 curwid,
                                 curht + TITLE_HEIGHT);
-        xlib::XResizeWindow(self.display, client, curwid, curht);
+        xlib::XResizeWindow(self.display, ev.window, curwid, curht);
       }
+    }
+  }
+
+  /// get all window IDs in current screen.
+  fn query_tree(&self, win: xlib::Window) -> Vec<xlib::Window> {
+    unsafe {
+      let mut wins_ptr: *mut xlib::Window = null_mut();
+      let mut nwins = 0;
+      let mut w1: xlib::Window = 0;
+      let mut w2: xlib::Window = 0;
+      xlib::XQueryTree(self.display,
+                       win,
+                       &mut w1,
+                       &mut w2,
+                       &mut wins_ptr,
+                       &mut nwins);
+      let wins = Vec::from_raw_parts(wins_ptr, nwins as usize, nwins as usize);
+      xlib::XFree(wins_ptr as *mut c_void);
+      wins
+    }
+  }
+
+  fn get_attributes(&self, win: xlib::Window) -> xlib::XWindowAttributes {
+    unsafe {
+      let mut attr = zeroed::<xlib::XWindowAttributes>();
+      xlib::XGetWindowAttributes(self.display, win, &mut attr as *mut xlib::XWindowAttributes);
+      attr
+    }
+  }
+
+  fn get_geometry(&self, win: xlib::Window) -> (xlib::Window, i32, i32, u32, u32, u32, u32) {
+    unsafe {
+      let mut root: xlib::Window = 0;
+      let (mut x, mut y, mut width, mut height, mut border_width, mut depth) = (0, 0, 0, 0, 0, 0);
+      xlib::XGetGeometry(self.display,
+                         win,
+                         &mut root,
+                         &mut x,
+                         &mut y,
+                         &mut width,
+                         &mut height,
+                         &mut border_width,
+                         &mut depth);
+      (root, x, y, width, height, border_width, depth)
     }
   }
 }
