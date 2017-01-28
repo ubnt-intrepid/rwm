@@ -1,20 +1,26 @@
-use std::os::raw::{c_void, c_int};
+use std::os::raw::{c_void, c_int, c_uint, c_ulong};
 use std::ffi::CString;
 use std::ptr::null_mut;
 
 use x11::xlib;
 
+const TITLE_HEIGHT: c_uint = 32;
+
 
 enum Event {
+  ButtonPress(xlib::XButtonPressedEvent),
+  Expose(xlib::XExposeEvent),
   MapRequest(xlib::XMapRequestEvent),
   Unmap(xlib::XUnmapEvent),
   Destroy(xlib::XDestroyWindowEvent),
+  ConfigureRequest(xlib::XConfigureRequestEvent),
   Unknown,
 }
 
 
 struct Entry {
   window: xlib::Window,
+  frame: xlib::Window,
   ignore_unmap: bool,
 }
 
@@ -22,6 +28,8 @@ struct Entry {
 struct Env {
   display: *mut xlib::Display,
   root: xlib::Window,
+  black_pixel: c_ulong,
+  white_pixel: c_ulong,
   clients: Vec<Entry>,
 }
 
@@ -51,10 +59,14 @@ impl Env {
 
     let screen = unsafe { xlib::XDefaultScreenOfDisplay(display) };
     let root = unsafe { xlib::XRootWindowOfScreen(screen) };
+    let black_pixel = unsafe { xlib::XBlackPixelOfScreen(screen) };
+    let white_pixel = unsafe { xlib::XWhitePixelOfScreen(screen) };
 
     Ok(Env {
       clients: Vec::new(),
       root: root,
+      black_pixel: black_pixel,
+      white_pixel: white_pixel,
       display: display,
     })
   }
@@ -78,9 +90,12 @@ impl Env {
       let mut ev = ::std::mem::zeroed::<xlib::XEvent>();
       xlib::XNextEvent(self.display, &mut ev);
       match ev.get_type() {
+        xlib::ButtonPress => Event::ButtonPress(::std::mem::transmute_copy(&ev)),
+        xlib::Expose => Event::Expose(::std::mem::transmute_copy(&ev)),
         xlib::MapRequest => Event::MapRequest(::std::mem::transmute_copy(&ev)),
         xlib::UnmapNotify => Event::Unmap(::std::mem::transmute_copy(&ev)),
         xlib::DestroyNotify => Event::Destroy(::std::mem::transmute_copy(&ev)),
+        xlib::ConfigureRequest => Event::ConfigureRequest(::std::mem::transmute_copy(&ev)),
         _ => Event::Unknown,
       }
     }
@@ -100,6 +115,11 @@ impl Env {
                        &mut nwins);
 
       for &win in ::std::slice::from_raw_parts(wins, nwins as usize) {
+        let mut attr = ::std::mem::zeroed::<xlib::XWindowAttributes>();
+        xlib::XGetWindowAttributes(self.display, win, &mut attr as *mut xlib::XWindowAttributes);
+        if attr.override_redirect != 0 {
+          continue;
+        }
         self.manage(win, true);
       }
 
@@ -110,32 +130,62 @@ impl Env {
     Ok(())
   }
 
-  fn get_attributes(&self, win: xlib::Window) -> xlib::XWindowAttributes {
-    unsafe {
-      let mut attr = ::std::mem::zeroed::<xlib::XWindowAttributes>();
-      xlib::XGetWindowAttributes(self.display, win, &mut attr as *mut xlib::XWindowAttributes);
-      attr
-    }
-  }
-
   fn manage(&mut self, win: xlib::Window, ignore_unmap: bool) {
     if self.clients.iter().find(|&cli| cli.window == win).is_some() {
       return;
     }
 
-    let attr = self.get_attributes(win);
-    if attr.override_redirect != 0 {
-      return;
+    let mut root: xlib::Window = 0;
+    let (mut x, mut y, mut width, mut height, mut border_width, mut depth) = (0, 0, 0, 0, 0, 0);
+    unsafe {
+      xlib::XGetGeometry(self.display,
+                         win,
+                         &mut root,
+                         &mut x,
+                         &mut y,
+                         &mut width,
+                         &mut height,
+                         &mut border_width,
+                         &mut depth);
     }
 
+    let width = ::std::cmp::max(width, 100);
+    let height = ::std::cmp::max(height, 100);
+
+    let frame = unsafe {
+      let mut attr = ::std::mem::zeroed::<xlib::XSetWindowAttributes>();
+      attr.override_redirect = xlib::True;
+      attr.event_mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask |
+                        xlib::ButtonPressMask | xlib::ButtonReleaseMask |
+                        xlib::ButtonMotionMask | xlib::ExposureMask;
+      attr.background_pixel = self.white_pixel;
+      attr.border_pixel = self.black_pixel;
+      xlib::XCreateWindow(self.display,
+                          self.root,
+                          x,
+                          y,
+                          width,
+                          height + TITLE_HEIGHT,
+                          1,
+                          0,
+                          0,
+                          null_mut(),
+                          xlib::CWEventMask | xlib::CWBackPixel | xlib::CWBorderPixel |
+                          xlib::CWOverrideRedirect,
+                          &mut attr)
+    };
+
     unsafe {
-      xlib::XReparentWindow(self.display, win, self.root, 0, 0);
-      xlib::XResizeWindow(self.display, win, 300, 200);
+      xlib::XReparentWindow(self.display, win, frame, x, y + TITLE_HEIGHT as c_int);
+      xlib::XResizeWindow(self.display, win, width, height);
       xlib::XMapWindow(self.display, win);
+      xlib::XMapWindow(self.display, frame);
+      xlib::XChangeSaveSet(self.display, win, xlib::SetModeInsert);
     }
 
     self.clients.push(Entry {
       window: win,
+      frame: frame,
       ignore_unmap: ignore_unmap,
     });
   }
@@ -149,6 +199,9 @@ impl Env {
     if self.clients[pos].ignore_unmap {
       self.clients[pos].ignore_unmap = false;
     } else {
+      unsafe {
+        xlib::XDestroyWindow(self.display, self.clients[pos].frame);
+      }
       self.clients.remove(pos);
     }
   }
@@ -158,12 +211,17 @@ impl Env {
 pub fn run() -> Result<(), &'static str> {
   let mut env = Env::new("")?;
   env.mask_events()?;
-  info!("mask_events");
   env.scan_wins()?;
 
   info!("now starting main loop...");
   loop {
     match env.next_event() {
+      Event::ButtonPress(_) => {
+        info!("event: ButtonPress");
+      }
+      Event::Expose(_) => {
+        info!("event: Expose");
+      }
       Event::MapRequest(ev) => {
         info!("event: MapRequest");
         env.manage(ev.window, false);
@@ -173,8 +231,11 @@ pub fn run() -> Result<(), &'static str> {
         env.unmanage(ev.window)
       }
       Event::Destroy(ev) => {
-        info!("event Destroy");
+        info!("event: Destroy");
         env.unmanage(ev.window)
+      }
+      Event::ConfigureRequest(_) => {
+        info!("event: ConfigureRequest");
       }
       Event::Unknown => info!("Unknown event"),
     }
