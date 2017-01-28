@@ -210,6 +210,41 @@ impl Env {
       self.clients.remove(pos);
     }
   }
+
+  fn frame_of(&self, client: xlib::Window) -> Option<xlib::Window> {
+    self.clients
+      .iter()
+      .find(|&ent| ent.window == client)
+      .map(|ref ent| ent.frame)
+  }
+
+  fn configure(&mut self, ev: xlib::XConfigureRequestEvent) {
+    if let Some(frame) = self.frame_of(ev.window) {
+      let client = ev.window;
+      let mut root: xlib::Window = 0;
+      let (mut curx, mut cury, mut curwid, mut curht, mut curbd, mut curdepth) = (0, 0, 0, 0, 0, 0);
+      unsafe {
+        xlib::XGetGeometry(self.display,
+                           client,
+                           &mut root,
+                           &mut curx,
+                           &mut cury,
+                           &mut curwid,
+                           &mut curht,
+                           &mut curbd,
+                           &mut curdepth);
+      }
+      unsafe {
+        xlib::XMoveResizeWindow(self.display,
+                                frame,
+                                curx,
+                                cury - TITLE_HEIGHT as i32,
+                                curwid,
+                                curht + TITLE_HEIGHT);
+        xlib::XResizeWindow(self.display, client, curwid, curht);
+      }
+    }
+  }
 }
 
 
@@ -238,8 +273,9 @@ pub fn run() -> Result<(), &'static str> {
         info!("event: Destroy");
         env.unmanage(ev.window)
       }
-      Event::ConfigureRequest(_) => {
+      Event::ConfigureRequest(ev) => {
         info!("event: ConfigureRequest");
+        env.configure(ev);
       }
       Event::Unknown => info!("event: Unknown"),
     }
