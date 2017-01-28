@@ -1,7 +1,8 @@
 use std::os::raw::{c_void, c_int, c_uint, c_ulong};
 use std::ffi::CString;
 use std::ptr::null_mut;
-
+use std::mem::transmute_copy;
+use std::mem::zeroed;
 use x11::xlib;
 
 const TITLE_HEIGHT: c_uint = 32;
@@ -66,9 +67,17 @@ impl Env {
     let white_pixel = unsafe { xlib::XWhitePixelOfScreen(screen) };
 
     let gc = unsafe {
-      let mut gv = ::std::mem::zeroed::<xlib::XGCValues>();
+      let mut gv = zeroed::<xlib::XGCValues>();
       xlib::XCreateGC(display, root, 0, &mut gv as *mut xlib::XGCValues)
     };
+
+    unsafe {
+      let mut attr = zeroed::<xlib::XSetWindowAttributes>();
+      attr.event_mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
+      xlib::XChangeWindowAttributes(display, root, xlib::CWEventMask, &mut attr);
+    }
+
+    unsafe { xlib::XSync(display, xlib::False) };
 
     Ok(Env {
       clients: Vec::new(),
@@ -78,36 +87,6 @@ impl Env {
       gc: gc,
       display: display,
     })
-  }
-
-  fn mask_events(&mut self) -> Result<(), &'static str> {
-    let mut attr = unsafe { ::std::mem::zeroed::<xlib::XSetWindowAttributes>() };
-    attr.event_mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
-    unsafe {
-      xlib::XChangeWindowAttributes(self.display,
-                                    self.root,
-                                    xlib::CWCursor | xlib::CWEventMask,
-                                    &mut attr)
-    };
-
-    unsafe { xlib::XSync(self.display, xlib::False) };
-    Ok(())
-  }
-
-  fn next_event(&mut self) -> Event {
-    unsafe {
-      let mut ev = ::std::mem::zeroed::<xlib::XEvent>();
-      xlib::XNextEvent(self.display, &mut ev);
-      match ev.get_type() {
-        xlib::ButtonPress => Event::ButtonPress(::std::mem::transmute_copy(&ev)),
-        xlib::Expose => Event::Expose(::std::mem::transmute_copy(&ev)),
-        xlib::MapRequest => Event::MapRequest(::std::mem::transmute_copy(&ev)),
-        xlib::UnmapNotify => Event::Unmap(::std::mem::transmute_copy(&ev)),
-        xlib::DestroyNotify => Event::Destroy(::std::mem::transmute_copy(&ev)),
-        xlib::ConfigureRequest => Event::ConfigureRequest(::std::mem::transmute_copy(&ev)),
-        _ => Event::Unknown,
-      }
-    }
   }
 
   fn scan_wins(&mut self) -> Result<(), &'static str> {
@@ -124,7 +103,7 @@ impl Env {
                        &mut nwins);
 
       for &win in ::std::slice::from_raw_parts(wins, nwins as usize) {
-        let mut attr = ::std::mem::zeroed::<xlib::XWindowAttributes>();
+        let mut attr = zeroed::<xlib::XWindowAttributes>();
         xlib::XGetWindowAttributes(self.display, win, &mut attr as *mut xlib::XWindowAttributes);
         if attr.override_redirect != 0 {
           continue;
@@ -137,6 +116,22 @@ impl Env {
 
     info!("scan_wins: number of entries = {}", self.clients.len());
     Ok(())
+  }
+
+  fn next_event(&mut self) -> Event {
+    unsafe {
+      let mut ev = zeroed::<xlib::XEvent>();
+      xlib::XNextEvent(self.display, &mut ev);
+      match ev.get_type() {
+        xlib::ButtonPress => Event::ButtonPress(transmute_copy(&ev)),
+        xlib::Expose => Event::Expose(transmute_copy(&ev)),
+        xlib::MapRequest => Event::MapRequest(transmute_copy(&ev)),
+        xlib::UnmapNotify => Event::Unmap(transmute_copy(&ev)),
+        xlib::DestroyNotify => Event::Destroy(transmute_copy(&ev)),
+        xlib::ConfigureRequest => Event::ConfigureRequest(transmute_copy(&ev)),
+        _ => Event::Unknown,
+      }
+    }
   }
 
   fn manage(&mut self, win: xlib::Window, ignore_unmap: bool) {
@@ -162,13 +157,15 @@ impl Env {
     let height = ::std::cmp::max(height, 100);
 
     let frame = unsafe {
-      let mut attr = ::std::mem::zeroed::<xlib::XSetWindowAttributes>();
+      let mut attr = zeroed::<xlib::XSetWindowAttributes>();
       attr.override_redirect = xlib::True;
+      attr.background_pixel = self.white_pixel;
+      attr.border_pixel = self.black_pixel;
       attr.event_mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask |
                         xlib::ButtonPressMask | xlib::ButtonReleaseMask |
                         xlib::ButtonMotionMask | xlib::ExposureMask;
-      attr.background_pixel = self.white_pixel;
-      attr.border_pixel = self.black_pixel;
+      let mask = xlib::CWEventMask | xlib::CWBackPixel | xlib::CWBorderPixel |
+                 xlib::CWOverrideRedirect;
       xlib::XCreateWindow(self.display,
                           self.root,
                           x,
@@ -179,8 +176,7 @@ impl Env {
                           0,
                           0,
                           null_mut(),
-                          xlib::CWEventMask | xlib::CWBackPixel | xlib::CWBorderPixel |
-                          xlib::CWOverrideRedirect,
+                          mask,
                           &mut attr)
     };
 
@@ -219,10 +215,9 @@ impl Env {
 
 pub fn run() -> Result<(), &'static str> {
   let mut env = Env::new("")?;
-  env.mask_events()?;
   env.scan_wins()?;
 
-  info!("now starting main loop...");
+  info!("starting main loop...");
   loop {
     match env.next_event() {
       Event::ButtonPress(_) => {
@@ -246,7 +241,7 @@ pub fn run() -> Result<(), &'static str> {
       Event::ConfigureRequest(_) => {
         info!("event: ConfigureRequest");
       }
-      Event::Unknown => info!("Unknown event"),
+      Event::Unknown => info!("event: Unknown"),
     }
   }
 }
