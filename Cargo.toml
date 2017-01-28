@@ -6,5 +6,6 @@ authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 
 [dependencies]
 x11 = "*"
+libc = "*"
 log = "0.3"
 env_logger = "0.3"
