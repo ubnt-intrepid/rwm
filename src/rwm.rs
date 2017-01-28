@@ -30,14 +30,17 @@ struct Env {
   root: xlib::Window,
   black_pixel: c_ulong,
   white_pixel: c_ulong,
+  gc: xlib::GC,
   clients: Vec<Entry>,
 }
 
 impl Drop for Env {
   fn drop(&mut self) {
     unsafe {
+      xlib::XFreeGC(self.display, self.gc);
       xlib::XCloseDisplay(self.display);
     }
+    self.gc = null_mut();
     self.display = null_mut();
   }
 }
@@ -62,11 +65,17 @@ impl Env {
     let black_pixel = unsafe { xlib::XBlackPixelOfScreen(screen) };
     let white_pixel = unsafe { xlib::XWhitePixelOfScreen(screen) };
 
+    let gc = unsafe {
+      let mut gv = ::std::mem::zeroed::<xlib::XGCValues>();
+      xlib::XCreateGC(display, root, 0, &mut gv as *mut xlib::XGCValues)
+    };
+
     Ok(Env {
       clients: Vec::new(),
       root: root,
       black_pixel: black_pixel,
       white_pixel: white_pixel,
+      gc: gc,
       display: display,
     })
   }
