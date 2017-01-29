@@ -251,15 +251,12 @@ impl Env {
     }
   }
 
-  fn handle_buttonpress(&mut self, ev: xlib::XButtonPressedEvent) {
-    let frame = ev.window;
-    if let Some(client) = self.client_of(frame) {
-      match ev.button {
-        xlib::Button1 => self.move_frame(frame),
-        xlib::Button2 => self.resize_frame(frame, client),
-        xlib::Button3 => self.destroy_client(frame),
-        _ => (),
-      }
+  fn handle_buttonpress(&mut self, button: u32, frame: xlib::Window) {
+    match button {
+      xlib::Button1 => self.move_frame(frame),
+      xlib::Button2 => self.destroy_client(frame),
+      xlib::Button3 => self.resize_frame(frame),
+      _ => (),
     }
   }
 
@@ -306,10 +303,49 @@ impl Env {
     }
   }
 
-  fn resize_frame(&mut self, frame: xlib::Window, client: xlib::Window) {
+  fn resize_window(&mut self, frame: xlib::Window, width: u32, height: u32) {
+    if let Some(client) = self.client_of(frame) {
+      unsafe {
+        xlib::XResizeWindow(self.display, frame, width, height);
+        xlib::XResizeWindow(self.display,
+                            client,
+                            width,
+                            height - self.title_height() as u32);
+      }
+    }
+  }
+
+  fn resize_in_drag(&mut self, frame: xlib::Window, x: i32, y: i32) -> (i32, i32) {
+    loop {
+      match self.next_event() {
+        Event::ButtonRelease(ev) => return (ev.x_root, ev.y_root),
+        Event::MotionNotify(ev) => {
+          self.resize_window(frame,
+                             (ev.x_root - x).abs() as u32,
+                             (ev.y_root - y).abs() as u32)
+        }
+        _ => (),
+      }
+    }
+  }
+
+  fn resize_frame(&mut self, frame: xlib::Window) {
     trace!("resize_frame");
-    drop(frame);
-    drop(client);
+    let (_, x, y, width, height, ..) = self.get_geometry(frame);
+    unsafe {
+      xlib::XWarpPointer(self.display,
+                         0,
+                         frame,
+                         x,
+                         y,
+                         width,
+                         height,
+                         width as i32,
+                         height as i32);
+    }
+    let (newx, newy) = self.resize_in_drag(frame, x, y);
+    let (newwidth, newheight) = ((newx - x).abs() as u32, (newy - y).abs() as u32);
+    self.resize_window(frame, newwidth, newheight);
   }
 
   fn destroy_client(&mut self, frame: xlib::Window) {
@@ -370,7 +406,9 @@ impl Env {
       match self.next_event() {
         Event::ButtonPress(ev) => {
           info!("event: ButtonPress");
-          self.handle_buttonpress(ev);
+          let frame = ev.window;
+          let button = ev.button;
+          self.handle_buttonpress(button, frame);
         }
         Event::Expose(ev) => {
           info!("event: Expose");
