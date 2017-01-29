@@ -1,12 +1,10 @@
-use std::os::raw::{c_void, c_int, c_uint, c_ulong};
+use std::os::raw::{c_void, c_int, c_ulong, c_char};
 use std::ffi::CString;
 use std::ptr::null_mut;
 use std::mem::transmute_copy;
 use std::mem::zeroed;
 use x11::xlib;
-
-const TITLE_HEIGHT: c_uint = 32;
-
+use libc;
 
 enum Event {
   ButtonPress(xlib::XButtonPressedEvent),
@@ -32,6 +30,7 @@ struct Env {
   black_pixel: c_ulong,
   white_pixel: c_ulong,
   gc: xlib::GC,
+  font: *mut xlib::XFontStruct,
   clients: Vec<Entry>,
 }
 
@@ -71,6 +70,8 @@ impl Env {
       xlib::XCreateGC(display, root, 0, &mut gv as *mut xlib::XGCValues)
     };
 
+    let font = unsafe { xlib::XQueryFont(display, ::std::mem::transmute(gc)) };
+
     unsafe {
       let mut attr = zeroed::<xlib::XSetWindowAttributes>();
       attr.event_mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask;
@@ -85,6 +86,7 @@ impl Env {
       black_pixel: black_pixel,
       white_pixel: white_pixel,
       gc: gc,
+      font: font,
       display: display,
     })
   }
@@ -107,6 +109,13 @@ impl Env {
       .iter()
       .find(|&ent| ent.window == client)
       .map(|ref ent| ent.frame)
+  }
+
+  fn client_of(&self, frame: xlib::Window) -> Option<xlib::Window> {
+    self.clients
+      .iter()
+      .find(|&ent| ent.frame == frame)
+      .map(|ref ent| ent.window)
   }
 
   fn next_event(&mut self) -> Event {
@@ -132,8 +141,8 @@ impl Env {
 
     let (_, x, y, width, height, ..) = self.get_geometry(win);
 
-    let width = ::std::cmp::max(width, 100);
-    let height = ::std::cmp::max(height, 100);
+    let width = ::std::cmp::max(width, 600);
+    let height = ::std::cmp::max(height, 400);
 
     let frame = unsafe {
       let mut attr = zeroed::<xlib::XSetWindowAttributes>();
@@ -150,7 +159,7 @@ impl Env {
                           x,
                           y,
                           width,
-                          height + TITLE_HEIGHT,
+                          height + self.title_height() as u32,
                           1,
                           0,
                           0,
@@ -160,7 +169,7 @@ impl Env {
     };
 
     unsafe {
-      xlib::XReparentWindow(self.display, win, frame, x, y + TITLE_HEIGHT as c_int);
+      xlib::XReparentWindow(self.display, win, frame, x, y + self.title_height());
       xlib::XResizeWindow(self.display, win, width, height);
       xlib::XMapWindow(self.display, win);
       xlib::XMapWindow(self.display, frame);
@@ -197,11 +206,44 @@ impl Env {
         xlib::XMoveResizeWindow(self.display,
                                 frame,
                                 curx,
-                                cury - TITLE_HEIGHT as i32,
+                                cury - self.title_height(),
                                 curwid,
-                                curht + TITLE_HEIGHT);
+                                curht + self.title_height() as u32);
         xlib::XResizeWindow(self.display, ev.window, curwid, curht);
       }
+    }
+  }
+
+  fn title_height(&self) -> i32 {
+    if self.font != null_mut() {
+      unsafe { (*self.font).ascent + (*self.font).descent }
+    } else {
+      18
+    }
+  }
+
+  fn paint_frame(&mut self, frame: xlib::Window) {
+    let text = if let Some(client) = self.client_of(frame) {
+      unsafe {
+        let mut name: *mut c_char = null_mut();
+        xlib::XFetchName(self.display, client, &mut name);
+        CString::from_raw(name)
+      }
+    } else {
+      CString::new("<unknown>").unwrap()
+    };
+    unsafe {
+      xlib::XDrawString(self.display,
+                        frame,
+                        self.gc,
+                        5,
+                        if self.font != null_mut() {
+                          (*self.font).ascent
+                        } else {
+                          14
+                        },
+                        text.as_ptr(),
+                        libc::strlen(text.as_ptr()) as c_int);
     }
   }
 
@@ -261,8 +303,11 @@ pub fn run() -> Result<(), &'static str> {
       Event::ButtonPress(_) => {
         info!("event: ButtonPress");
       }
-      Event::Expose(_) => {
+      Event::Expose(ev) => {
         info!("event: Expose");
+        if ev.count == 0 {
+          env.paint_frame(ev.window);
+        }
       }
       Event::MapRequest(ev) => {
         info!("event: MapRequest");
