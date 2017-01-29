@@ -8,6 +8,8 @@ use libc;
 
 enum Event {
   ButtonPress(xlib::XButtonPressedEvent),
+  ButtonRelease(xlib::XButtonReleasedEvent),
+  MotionNotify(xlib::XMotionEvent),
   Expose(xlib::XExposeEvent),
   MapRequest(xlib::XMapRequestEvent),
   Unmap(xlib::XUnmapEvent),
@@ -24,7 +26,7 @@ struct Entry {
 }
 
 
-struct Env {
+pub struct Env {
   display: *mut xlib::Display,
   root: xlib::Window,
   black_pixel: c_ulong,
@@ -50,7 +52,7 @@ extern "C" fn error_handler(_: *mut xlib::Display, _: *mut xlib::XErrorEvent) ->
 }
 
 impl Env {
-  fn new(displayname: &str) -> Result<Env, &'static str> {
+  pub fn new(displayname: &str) -> Result<Env, &'static str> {
     let displayname = CString::new(displayname).unwrap();
     let display = unsafe { xlib::XOpenDisplay(displayname.as_ptr()) };
     if display == null_mut() {
@@ -91,7 +93,7 @@ impl Env {
     })
   }
 
-  fn scan_wins(&mut self) -> Result<(), &'static str> {
+  pub fn scan_wins(&mut self) -> Result<(), &'static str> {
     for win in self.query_tree(self.root) {
       let attr = self.get_attributes(win);
       if attr.override_redirect != 0 {
@@ -124,6 +126,8 @@ impl Env {
       xlib::XNextEvent(self.display, &mut ev);
       match ev.get_type() {
         xlib::ButtonPress => Event::ButtonPress(transmute_copy(&ev)),
+        xlib::ButtonRelease => Event::ButtonRelease(transmute_copy(&ev)),
+        xlib::MotionNotify => Event::MotionNotify(transmute_copy(&ev)),
         xlib::Expose => Event::Expose(transmute_copy(&ev)),
         xlib::MapRequest => Event::MapRequest(transmute_copy(&ev)),
         xlib::UnmapNotify => Event::Unmap(transmute_copy(&ev)),
@@ -247,6 +251,76 @@ impl Env {
     }
   }
 
+  fn handle_buttonpress(&mut self, ev: xlib::XButtonPressedEvent) {
+    let frame = ev.window;
+    if let Some(client) = self.client_of(frame) {
+      match ev.button {
+        xlib::Button1 => self.move_frame(frame),
+        xlib::Button2 => self.resize_frame(frame, client),
+        xlib::Button3 => self.destroy_client(frame),
+        _ => (),
+      }
+    }
+  }
+
+  fn query_pointer(&self,
+                   win: xlib::Window)
+                   -> (xlib::Window, xlib::Window, i32, i32, i32, i32, u32) {
+    let (mut root, mut child): (xlib::Window, xlib::Window) = (0, 0);
+    let (mut root_x, mut root_y, mut win_x, mut win_y, mut mask) = (0, 0, 0, 0, 0);
+    unsafe {
+      xlib::XQueryPointer(self.display,
+                          win,
+                          &mut root,
+                          &mut child,
+                          &mut root_x,
+                          &mut root_y,
+                          &mut win_x,
+                          &mut win_y,
+                          &mut mask);
+    }
+    (root, child, root_x, root_y, win_x, win_y, mask)
+  }
+
+  fn move_in_drag(&mut self, win: xlib::Window, x: i32, y: i32) -> (i32, i32) {
+    loop {
+      match self.next_event() {
+        Event::ButtonRelease(ev) => return (ev.x_root - x, ev.y_root - y),
+        Event::MotionNotify(ev) => unsafe {
+          xlib::XMoveWindow(self.display, win, ev.x_root - x, ev.y_root - y);
+        },
+        _ => (),
+      }
+    }
+  }
+
+  fn move_frame(&mut self, frame: xlib::Window) {
+    trace!("move_frame");
+    unsafe {
+      xlib::XRaiseWindow(self.display, frame);
+    }
+    let (_, _, _, _, win_x, win_y, ..) = self.query_pointer(frame);
+    let (x, y) = self.move_in_drag(frame, win_x, win_y);
+    unsafe {
+      xlib::XMoveWindow(self.display, frame, x, y);
+    }
+  }
+
+  fn resize_frame(&mut self, frame: xlib::Window, client: xlib::Window) {
+    trace!("resize_frame");
+    drop(frame);
+    drop(client);
+  }
+
+  fn destroy_client(&mut self, frame: xlib::Window) {
+    trace!("destroy_client");
+    if let Some(client) = self.client_of(frame) {
+      unsafe {
+        xlib::XKillClient(self.display, client);
+      }
+    }
+  }
+
   /// get all window IDs in current screen.
   fn query_tree(&self, win: xlib::Window) -> Vec<xlib::Window> {
     unsafe {
@@ -290,42 +364,40 @@ impl Env {
       (root, x, y, width, height, border_width, depth)
     }
   }
-}
 
-
-pub fn run() -> Result<(), &'static str> {
-  let mut env = Env::new("")?;
-  env.scan_wins()?;
-
-  info!("starting main loop...");
-  loop {
-    match env.next_event() {
-      Event::ButtonPress(_) => {
-        info!("event: ButtonPress");
-      }
-      Event::Expose(ev) => {
-        info!("event: Expose");
-        if ev.count == 0 {
-          env.paint_frame(ev.window);
+  pub fn handle_event(mut self) -> Result<(), &'static str> {
+    loop {
+      match self.next_event() {
+        Event::ButtonPress(ev) => {
+          info!("event: ButtonPress");
+          self.handle_buttonpress(ev);
+        }
+        Event::Expose(ev) => {
+          info!("event: Expose");
+          if ev.count == 0 {
+            self.paint_frame(ev.window);
+          }
+        }
+        Event::MapRequest(ev) => {
+          info!("event: MapRequest");
+          self.manage(ev.window, false);
+        }
+        Event::Unmap(ev) => {
+          info!("event: Unmap");
+          self.unmanage(ev.window)
+        }
+        Event::Destroy(ev) => {
+          info!("event: Destroy");
+          self.unmanage(ev.window)
+        }
+        Event::ConfigureRequest(ev) => {
+          info!("event: ConfigureRequest");
+          self.configure(ev);
+        }
+        _ => {
+          info!("event: Unhandled");
         }
       }
-      Event::MapRequest(ev) => {
-        info!("event: MapRequest");
-        env.manage(ev.window, false);
-      }
-      Event::Unmap(ev) => {
-        info!("event: Unmap");
-        env.unmanage(ev.window)
-      }
-      Event::Destroy(ev) => {
-        info!("event: Destroy");
-        env.unmanage(ev.window)
-      }
-      Event::ConfigureRequest(ev) => {
-        info!("event: ConfigureRequest");
-        env.configure(ev);
-      }
-      Event::Unknown => info!("event: Unknown"),
     }
   }
 }

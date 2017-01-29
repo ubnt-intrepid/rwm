@@ -9,10 +9,18 @@ extern "C" {}
 
 mod rwm;
 
+fn run() -> Result<(), &'static str> {
+  let mut env = rwm::Env::new("")?;
+  env.scan_wins()?;
+
+  trace!("starting main loop...");
+  env.handle_event()
+}
+
 fn main() {
   env_logger::init().unwrap();
 
-  if let Err(mesg) = rwm::run() {
+  if let Err(mesg) = run() {
     error!("error: {}", mesg);
   }
 }
