@@ -12,6 +12,36 @@ struct Client {
 }
 
 impl Client {
+  fn new(ws: Rc<WindowSystem>,
+         client: xlib::Window,
+         title_height: u32,
+         ignore_unmap: bool)
+         -> Client {
+    // get size information from client window.
+    let (_, x, y, width, height, ..) = ws.get_geometry(client);
+    let width = ::std::cmp::max(width, 600);
+    let height = ::std::cmp::max(height, 400);
+
+    // create frame window
+    let frame = ws.create_window(x, y, width, height + title_height);
+
+    ws.reparent_window(client, frame, x, y + title_height as i32);
+    ws.resize_window(client, width, height);
+
+    ws.map_window(client);
+    ws.map_window(frame);
+
+    ws.add_to_saveset(client);
+
+    Client {
+      client: client,
+      frame: frame,
+      ignore_unmap: ignore_unmap,
+      title_height: title_height,
+      ws: ws,
+    }
+  }
+
   fn resize(&self, width: u32, height: u32) {
     self.ws.resize_window(self.frame, width, height);
     self.ws.resize_window(self.client, width, height - self.title_height);
@@ -175,29 +205,11 @@ impl Env {
   }
 
   fn manage(&mut self, client: xlib::Window, ignore_unmap: bool) {
-    if self.clients.iter().find(|&entry| entry.client == client).is_some() {
+    if self.find_by_client(client).is_some() {
       return;
     }
-
-    let (_, x, y, width, height, ..) = self.ws.get_geometry(client);
-    let width = ::std::cmp::max(width, 600);
-    let height = ::std::cmp::max(height, 400);
-
-    let frame = self.ws.create_window(x, y, width, height + self.title_height() as u32);
-    self.ws.reparent_window(client, frame, x, y + self.title_height());
-    self.ws.resize_window(client, width, height);
-    self.ws.map_window(client);
-    self.ws.map_window(frame);
-    self.ws.add_to_saveset(client);
-
-    let title_height = self.title_height() as u32;
-    self.clients.push(Client {
-      client: client,
-      frame: frame,
-      ignore_unmap: ignore_unmap,
-      title_height: title_height,
-      ws: self.ws.clone(),
-    });
+    let client = Client::new(self.ws.clone(), client, self.title_height(), ignore_unmap);
+    self.clients.push(client);
   }
 
   fn unmanage(&mut self, client: xlib::Window) {
@@ -214,7 +226,7 @@ impl Env {
     }
   }
 
-  fn title_height(&self) -> i32 {
-    self.ws.font().map(|ref font| font.ascent + font.descent).unwrap_or(18)
+  fn title_height(&self) -> u32 {
+    self.ws.font().map(|ref font| (font.ascent + font.descent) as u32).unwrap_or(18)
   }
 }
