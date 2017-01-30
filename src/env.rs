@@ -1,14 +1,86 @@
 use x11::xlib;
 use backend::{WindowSystem, Event};
+use std::rc::Rc;
 
+/// represents a window to manage.
 struct Client {
+  ws: Rc<WindowSystem>,
   client: xlib::Window,
   frame: xlib::Window,
   ignore_unmap: bool,
+  title_height: u32,
 }
 
+impl Client {
+  fn resize(&self, width: u32, height: u32) {
+    self.ws.resize_window(self.frame, width, height);
+    self.ws.resize_window(self.client, width, height - self.title_height);
+  }
+
+  fn draw(&self) {
+    let text = self.ws.fetch_name(self.client);
+    let y = self.ws.font().map(|ref font| font.ascent).unwrap_or(14);
+    self.ws.draw_string(self.frame, text, 5, y);
+  }
+
+  fn configure(&self) {
+    let (_, curx, cury, curwid, curht, ..) = self.ws.get_geometry(self.client);
+    self.ws.move_window(self.frame, curx, cury - self.title_height as i32);
+    self.ws.resize_window(self.frame, curwid, curht + self.title_height);
+    self.ws.resize_window(self.client, curwid, curht);
+  }
+
+  fn kill(&self) {
+    self.ws.kill_client(self.client);
+  }
+
+  fn move_in_drag(&self) {
+    self.ws.raise_window(self.frame);
+    let (_, _, _, _, x, y, ..) = self.ws.query_pointer(self.frame);
+
+    let (newx, newy);
+    loop {
+      match self.ws.next_event() {
+        Event::ButtonRelease(ev) => {
+          newx = ev.x_root - x;
+          newy = ev.y_root - y;
+          break;
+        }
+        Event::MotionNotify(ev) => self.ws.move_window(self.frame, ev.x_root - x, ev.y_root - y),
+        _ => (),
+      }
+    }
+
+    self.ws.move_window(self.frame, newx, newy);
+  }
+
+  fn resize_in_drag(&self) {
+    let (_, x, y, width, height, ..) = self.ws.get_geometry(self.frame);
+    self.ws.warp_pointer(self.frame, x, y, width, height);
+
+    let (newx, newy);
+    loop {
+      match self.ws.next_event() {
+        Event::ButtonRelease(ev) => {
+          newx = ev.x_root;
+          newy = ev.y_root;
+          break;
+        }
+        Event::MotionNotify(ev) => {
+          self.resize((ev.x_root - x).abs() as u32, (ev.y_root - y).abs() as u32)
+        }
+        _ => (),
+      }
+    }
+    let (newwidth, newheight) = ((newx - x).abs() as u32, (newy - y).abs() as u32);
+
+    self.resize(newwidth, newheight);
+  }
+}
+
+
 pub struct Env {
-  ws: WindowSystem,
+  ws: Rc<WindowSystem>,
   clients: Vec<Client>,
 }
 
@@ -16,7 +88,7 @@ impl Env {
   pub fn new(displayname: &str) -> Result<Env, &'static str> {
     let ws = WindowSystem::new(displayname)?;
     Ok(Env {
-      ws: ws,
+      ws: Rc::new(ws),
       clients: Vec::new(),
     })
   }
@@ -37,57 +109,50 @@ impl Env {
   pub fn handle_event(mut self) -> Result<(), &'static str> {
     loop {
       match self.ws.next_event() {
-        Event::ButtonPress(ev) => {
+        Event::ButtonPress(xlib::XButtonPressedEvent { button, window, .. }) => {
           info!("event: ButtonPress");
-          if let Some(ref client) = self.find_by_frame(ev.window) {
-            match ev.button {
+          if let Some(ref client) = self.find_by_frame(window) {
+            match button {
               xlib::Button1 => {
                 trace!("move_frame");
-                self.ws.raise_window(client.frame);
-                let (_, _, _, _, win_x, win_y, ..) = self.ws.query_pointer(client.frame);
-                let (x, y) = self.move_in_drag(client, win_x, win_y);
-                self.ws.move_window(client.frame, x, y);
+                client.move_in_drag();
               }
               xlib::Button2 => {
                 trace!("destroy_client");
-                self.ws.kill_client(client.client);
+                client.kill();
               }
               xlib::Button3 => {
                 trace!("resize_frame");
-                let (_, x, y, width, height, ..) = self.ws.get_geometry(client.frame);
-                self.ws.warp_pointer(client.frame, x, y, width, height);
-                let (newx, newy) = self.resize_in_drag(client, x, y);
-                let (newwidth, newheight) = ((newx - x).abs() as u32, (newy - y).abs() as u32);
-                self.resize_client(client, newwidth, newheight);
+                client.resize_in_drag();
               }
               _ => (),
             }
           }
         }
-        Event::Expose(ev) => {
+        Event::Expose(xlib::XExposeEvent { count, window, .. }) => {
           info!("event: Expose");
-          if ev.count == 0 {
-            if let Some(ref client) = self.find_by_frame(ev.window) {
-              self.paint_frame(client);
+          if count == 0 {
+            if let Some(ref client) = self.find_by_frame(window) {
+              client.draw();
             }
           }
         }
-        Event::MapRequest(ev) => {
+        Event::MapRequest(xlib::XMapRequestEvent { window, .. }) => {
           info!("event: MapRequest");
-          self.manage(ev.window, false);
+          self.manage(window, false);
         }
-        Event::Unmap(ev) => {
+        Event::Unmap(xlib::XUnmapEvent { window, .. }) => {
           info!("event: Unmap");
-          self.unmanage(ev.window)
+          self.unmanage(window)
         }
-        Event::Destroy(ev) => {
+        Event::Destroy(xlib::XDestroyWindowEvent { window, .. }) => {
           info!("event: Destroy");
-          self.unmanage(ev.window)
+          self.unmanage(window)
         }
-        Event::ConfigureRequest(ev) => {
+        Event::ConfigureRequest(xlib::XConfigureRequestEvent { window, .. }) => {
           info!("event: ConfigureRequest");
-          if let Some(ref client) = self.find_by_client(ev.window) {
-            self.configure(client);
+          if let Some(ref client) = self.find_by_client(window) {
+            client.configure();
           }
         }
         _ => {
@@ -125,10 +190,13 @@ impl Env {
     self.ws.map_window(frame);
     self.ws.add_to_saveset(client);
 
+    let title_height = self.title_height() as u32;
     self.clients.push(Client {
       client: client,
       frame: frame,
       ignore_unmap: ignore_unmap,
+      title_height: title_height,
+      ws: self.ws.clone(),
     });
   }
 
@@ -146,49 +214,7 @@ impl Env {
     }
   }
 
-  fn configure(&self, client: &Client) {
-    let (_, curx, cury, curwid, curht, ..) = self.ws.get_geometry(client.client);
-    self.ws.move_window(client.frame, curx, cury - self.title_height());
-    self.ws.resize_window(client.frame, curwid, curht + self.title_height() as u32);
-    self.ws.resize_window(client.client, curwid, curht);
-  }
-
   fn title_height(&self) -> i32 {
     self.ws.font().map(|ref font| font.ascent + font.descent).unwrap_or(18)
-  }
-
-  fn paint_frame(&self, client: &Client) {
-    let text = self.ws.fetch_name(client.client);
-    let y = self.ws.font().map(|ref font| font.ascent).unwrap_or(14);
-    self.ws.draw_string(client.frame, text, 5, y);
-  }
-
-  fn move_in_drag(&self, client: &Client, x: i32, y: i32) -> (i32, i32) {
-    loop {
-      match self.ws.next_event() {
-        Event::ButtonRelease(ev) => return (ev.x_root - x, ev.y_root - y),
-        Event::MotionNotify(ev) => self.ws.move_window(client.frame, ev.x_root - x, ev.y_root - y),
-        _ => (),
-      }
-    }
-  }
-
-  fn resize_in_drag(&self, client: &Client, x: i32, y: i32) -> (i32, i32) {
-    loop {
-      match self.ws.next_event() {
-        Event::ButtonRelease(ev) => return (ev.x_root, ev.y_root),
-        Event::MotionNotify(ev) => {
-          self.resize_client(client,
-                             (ev.x_root - x).abs() as u32,
-                             (ev.y_root - y).abs() as u32)
-        }
-        _ => (),
-      }
-    }
-  }
-
-  fn resize_client(&self, client: &Client, width: u32, height: u32) {
-    self.ws.resize_window(client.frame, width, height);
-    self.ws.resize_window(client.client, width, height - self.title_height() as u32);
   }
 }
