@@ -6,25 +6,13 @@ use std::mem::zeroed;
 use x11::xlib;
 use libc;
 
-enum Event {
-  ButtonPress(xlib::XButtonPressedEvent),
-  ButtonRelease(xlib::XButtonReleasedEvent),
-  MotionNotify(xlib::XMotionEvent),
-  Expose(xlib::XExposeEvent),
-  MapRequest(xlib::XMapRequestEvent),
-  Unmap(xlib::XUnmapEvent),
-  Destroy(xlib::XDestroyWindowEvent),
-  ConfigureRequest(xlib::XConfigureRequestEvent),
-  Unknown,
-}
-
+use backend::Event;
 
 struct Entry {
   window: xlib::Window,
   frame: xlib::Window,
   ignore_unmap: bool,
 }
-
 
 pub struct Env {
   display: *mut xlib::Display,
