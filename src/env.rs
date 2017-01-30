@@ -8,8 +8,8 @@ use libc;
 
 use backend::Event;
 
-struct Entry {
-  window: xlib::Window,
+struct Client {
+  client: xlib::Window,
   frame: xlib::Window,
   ignore_unmap: bool,
 }
@@ -21,7 +21,7 @@ pub struct Env {
   white_pixel: c_ulong,
   gc: xlib::GC,
   font: *mut xlib::XFontStruct,
-  clients: Vec<Entry>,
+  clients: Vec<Client>,
 }
 
 impl Drop for Env {
@@ -94,18 +94,16 @@ impl Env {
     Ok(())
   }
 
-  fn frame_of(&self, client: xlib::Window) -> Option<xlib::Window> {
+  fn find_by_client(&self, client: xlib::Window) -> Option<&Client> {
     self.clients
       .iter()
-      .find(|&ent| ent.window == client)
-      .map(|ref ent| ent.frame)
+      .find(|&ent| ent.client == client)
   }
 
-  fn client_of(&self, frame: xlib::Window) -> Option<xlib::Window> {
+  fn find_by_frame(&self, frame: xlib::Window) -> Option<&Client> {
     self.clients
       .iter()
       .find(|&ent| ent.frame == frame)
-      .map(|ref ent| ent.window)
   }
 
   fn next_event(&mut self) -> Event {
@@ -127,7 +125,7 @@ impl Env {
   }
 
   fn manage(&mut self, win: xlib::Window, ignore_unmap: bool) {
-    if self.clients.iter().find(|&cli| cli.window == win).is_some() {
+    if self.clients.iter().find(|&entry| entry.client == win).is_some() {
       return;
     }
 
@@ -168,15 +166,15 @@ impl Env {
       xlib::XChangeSaveSet(self.display, win, xlib::SetModeInsert);
     }
 
-    self.clients.push(Entry {
-      window: win,
+    self.clients.push(Client {
+      client: win,
       frame: frame,
       ignore_unmap: ignore_unmap,
     });
   }
 
   fn unmanage(&mut self, client: xlib::Window) {
-    let pos = match self.clients.iter().position(|ref ent| ent.window == client) {
+    let pos = match self.clients.iter().position(|ref entry| entry.client == client) {
       Some(pos) => pos,
       None => return,
     };
@@ -192,11 +190,11 @@ impl Env {
   }
 
   fn configure(&mut self, ev: xlib::XConfigureRequestEvent) {
-    if let Some(frame) = self.frame_of(ev.window) {
+    if let Some(ref entry) = self.find_by_client(ev.window) {
       let (_, curx, cury, curwid, curht, ..) = self.get_geometry(ev.window);
       unsafe {
         xlib::XMoveResizeWindow(self.display,
-                                frame,
+                                entry.frame,
                                 curx,
                                 cury - self.title_height(),
                                 curwid,
@@ -215,10 +213,10 @@ impl Env {
   }
 
   fn paint_frame(&mut self, frame: xlib::Window) {
-    let text = if let Some(client) = self.client_of(frame) {
+    let text = if let Some(ref entry) = self.find_by_frame(frame) {
       unsafe {
         let mut name: *mut c_char = null_mut();
-        xlib::XFetchName(self.display, client, &mut name);
+        xlib::XFetchName(self.display, entry.client, &mut name);
         CString::from_raw(name)
       }
     } else {
@@ -292,11 +290,11 @@ impl Env {
   }
 
   fn resize_window(&mut self, frame: xlib::Window, width: u32, height: u32) {
-    if let Some(client) = self.client_of(frame) {
+    if let Some(ref entry) = self.find_by_frame(frame) {
       unsafe {
-        xlib::XResizeWindow(self.display, frame, width, height);
+        xlib::XResizeWindow(self.display, entry.frame, width, height);
         xlib::XResizeWindow(self.display,
-                            client,
+                            entry.client,
                             width,
                             height - self.title_height() as u32);
       }
@@ -338,9 +336,9 @@ impl Env {
 
   fn destroy_client(&mut self, frame: xlib::Window) {
     trace!("destroy_client");
-    if let Some(client) = self.client_of(frame) {
+    if let Some(ref entry) = self.find_by_frame(frame) {
       unsafe {
-        xlib::XKillClient(self.display, client);
+        xlib::XKillClient(self.display, entry.client);
       }
     }
   }
