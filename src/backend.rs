@@ -23,6 +23,9 @@ pub struct WindowSystem {
   root: xlib::Window,
   gc: xlib::GC,
   font: *mut xlib::XFontStruct,
+  // fg: xlib::XColor,
+  bg: xlib::XColor,
+  bd: xlib::XColor,
 }
 
 impl Drop for WindowSystem {
@@ -49,8 +52,9 @@ impl WindowSystem {
       xlib::XSetErrorHandler(Some(error_handler));
     }
 
+    let screen = unsafe { xlib::XDefaultScreenOfDisplay(display) };
+
     let root = unsafe {
-      let screen = xlib::XDefaultScreenOfDisplay(display);
       let root = xlib::XRootWindowOfScreen(screen);
 
       let mut attr = zeroed::<xlib::XSetWindowAttributes>();
@@ -66,11 +70,36 @@ impl WindowSystem {
     };
     let font = unsafe { xlib::XQueryFont(display, ::std::mem::transmute(gc)) };
 
+    let def_cmap = unsafe { xlib::XDefaultColormap(display, xlib::XDefaultScreen(display)) };
+    let (mut fg, mut bg, mut bd): (xlib::XColor, xlib::XColor, xlib::XColor) =
+      unsafe { (zeroed(), zeroed(), zeroed()) };
+    let mut exact: xlib::XColor = unsafe { zeroed() };
+    unsafe {
+      xlib::XAllocNamedColor(display,
+                             def_cmap,
+                             CString::new("black").unwrap().as_ptr(),
+                             &mut fg,
+                             &mut exact);
+      xlib::XAllocNamedColor(display,
+                             def_cmap,
+                             CString::new("yellow").unwrap().as_ptr(),
+                             &mut bg,
+                             &mut exact);
+      xlib::XAllocNamedColor(display,
+                             def_cmap,
+                             CString::new("red").unwrap().as_ptr(),
+                             &mut bd,
+                             &mut exact);
+    }
+
     Ok(WindowSystem {
       display: display,
       root: root,
       gc: gc,
       font: font,
+      // fg: fg,
+      bg: bg,
+      bd: bd,
     })
   }
 
@@ -166,14 +195,10 @@ impl WindowSystem {
 
   pub fn create_window(&self, x: i32, y: i32, width: u32, height: u32) -> xlib::Window {
     unsafe {
-      let screen = xlib::XDefaultScreenOfDisplay(self.display);
-      let black_pixel = xlib::XBlackPixelOfScreen(screen);
-      let white_pixel = xlib::XWhitePixelOfScreen(screen);
-
       let mut attr = zeroed::<xlib::XSetWindowAttributes>();
       attr.override_redirect = xlib::True;
-      attr.background_pixel = white_pixel;
-      attr.border_pixel = black_pixel;
+      attr.background_pixel = self.bg.pixel;
+      attr.border_pixel = self.bd.pixel;
       attr.event_mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask |
                         xlib::ButtonPressMask | xlib::ButtonReleaseMask |
                         xlib::ButtonMotionMask | xlib::ExposureMask;

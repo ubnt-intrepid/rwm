@@ -25,8 +25,8 @@ impl Client {
     // create frame window
     let frame = ws.create_window(x, y, width, height + title_height);
 
-    ws.reparent_window(client, frame, x, y + title_height as i32);
-    ws.resize_window(client, width, height);
+    ws.reparent_window(client, frame, x + 5, y + 5 + title_height as i32);
+    ws.resize_window(client, width - 10, height - 10);
 
     ws.map_window(client);
     ws.map_window(frame);
@@ -44,7 +44,7 @@ impl Client {
 
   fn resize(&self, width: u32, height: u32) {
     self.ws.resize_window(self.frame, width, height);
-    self.ws.resize_window(self.client, width, height - self.title_height);
+    self.ws.resize_window(self.client, width - 10, height - 10 - self.title_height);
   }
 
   fn draw(&self) {
@@ -56,8 +56,7 @@ impl Client {
   fn configure(&self) {
     let (_, curx, cury, curwid, curht, ..) = self.ws.get_geometry(self.client);
     self.ws.move_window(self.frame, curx, cury - self.title_height as i32);
-    self.ws.resize_window(self.frame, curwid, curht + self.title_height);
-    self.ws.resize_window(self.client, curwid, curht);
+    self.resize(curwid, curht + self.title_height);
   }
 
   fn kill(&self) {
