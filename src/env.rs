@@ -153,7 +153,7 @@ impl Env {
       match self.ws.next_event() {
         Event::ButtonPress(xlib::XButtonPressedEvent { button, window, .. }) => {
           info!("event: ButtonPress");
-          if let Some(ref client) = self.find_by_frame(window) {
+          if let Some(ref client) = self.find_by_frame(window).or(self.find_by_client(window)) {
             client.handle_button_press(button);
           }
         }
