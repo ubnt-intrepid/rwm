@@ -82,6 +82,7 @@ impl Client {
   }
 
   fn resize_in_drag(&self) {
+    self.ws.raise_window(self.frame);
     let (_, x, y, width, height, ..) = self.ws.get_geometry(self.frame);
     self.ws.warp_pointer(self.frame, x, y, width, height);
 
