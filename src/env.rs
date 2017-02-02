@@ -1,6 +1,7 @@
 use x11::xlib;
 use backend::{WindowSystem, Event};
 use std::rc::Rc;
+use std::os::raw::c_uint;
 
 /// represents a window to manage.
 struct Client {
@@ -99,6 +100,24 @@ impl Client {
       }
     }
   }
+
+  pub fn handle_button_press(&self, button: c_uint) {
+    match button {
+      xlib::Button1 => {
+        trace!("move_frame");
+        self.move_in_drag();
+      }
+      xlib::Button2 => {
+        trace!("destroy_client");
+        self.kill();
+      }
+      xlib::Button3 => {
+        trace!("resize_frame");
+        self.resize_in_drag();
+      }
+      _ => (),
+    }
+  }
 }
 
 
@@ -135,21 +154,7 @@ impl Env {
         Event::ButtonPress(xlib::XButtonPressedEvent { button, window, .. }) => {
           info!("event: ButtonPress");
           if let Some(ref client) = self.find_by_frame(window) {
-            match button {
-              xlib::Button1 => {
-                trace!("move_frame");
-                client.move_in_drag();
-              }
-              xlib::Button2 => {
-                trace!("destroy_client");
-                client.kill();
-              }
-              xlib::Button3 => {
-                trace!("resize_frame");
-                client.resize_in_drag();
-              }
-              _ => (),
-            }
+            client.handle_button_press(button);
           }
         }
         Event::Expose(xlib::XExposeEvent { count, window, .. }) => {
