@@ -67,33 +67,29 @@ impl Client {
     self.ws.raise_window(self.frame);
     let (_, _, _, _, x, y, ..) = self.ws.query_pointer(self.frame);
 
-    let (newx, newy);
     loop {
       match self.ws.next_event() {
         Event::ButtonRelease(ev) => {
-          newx = ev.x_root - x;
-          newy = ev.y_root - y;
-          break;
+          self.ws.move_window(self.frame, ev.x_root - x, ev.y_root - y);
+          return;
         }
-        Event::MotionNotify(ev) => self.ws.move_window(self.frame, ev.x_root - x, ev.y_root - y),
+        Event::MotionNotify(ev) => {
+          self.ws.move_window(self.frame, ev.x_root - x, ev.y_root - y);
+        }
         _ => (),
       }
     }
-
-    self.ws.move_window(self.frame, newx, newy);
   }
 
   fn resize_in_drag(&self) {
     let (_, x, y, width, height, ..) = self.ws.get_geometry(self.frame);
     self.ws.warp_pointer(self.frame, x, y, width, height);
 
-    let (newx, newy);
     loop {
       match self.ws.next_event() {
         Event::ButtonRelease(ev) => {
-          newx = ev.x_root;
-          newy = ev.y_root;
-          break;
+          self.resize((ev.x_root - x).abs() as u32, (ev.y_root - y).abs() as u32);
+          return;
         }
         Event::MotionNotify(ev) => {
           self.resize((ev.x_root - x).abs() as u32, (ev.y_root - y).abs() as u32)
@@ -101,9 +97,6 @@ impl Client {
         _ => (),
       }
     }
-    let (newwidth, newheight) = ((newx - x).abs() as u32, (newy - y).abs() as u32);
-
-    self.resize(newwidth, newheight);
   }
 }
 
