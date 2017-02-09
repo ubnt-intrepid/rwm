@@ -6,7 +6,7 @@ use std::os::raw::c_uint;
 /// represents a window to manage.
 struct Client {
   ws: Rc<WindowSystem>,
-  client: xlib::Window,
+  window: xlib::Window,
   frame: xlib::Window,
   ignore_unmap: bool,
   title_height: u32,
@@ -14,28 +14,28 @@ struct Client {
 
 impl Client {
   fn new(ws: Rc<WindowSystem>,
-         client: xlib::Window,
+         window: xlib::Window,
          title_height: u32,
          ignore_unmap: bool)
          -> Client {
     // get size information from client window.
-    let (_, x, y, width, height, ..) = ws.get_geometry(client);
+    let (_, x, y, width, height, ..) = ws.get_geometry(window);
     let width = ::std::cmp::max(width, 600);
     let height = ::std::cmp::max(height, 400);
 
     // create frame window
     let frame = ws.create_window(x, y, width, height + title_height);
 
-    ws.reparent_window(client, frame, x + 5, y + 5 + title_height as i32);
-    ws.resize_window(client, width - 10, height - 10);
+    ws.reparent_window(window, frame, x + 5, y + 5 + title_height as i32);
+    ws.resize_window(window, width - 10, height - 10);
 
-    ws.map_window(client);
+    ws.map_window(window);
     ws.map_window(frame);
 
-    ws.add_to_saveset(client);
+    ws.add_to_saveset(window);
 
     Client {
-      client: client,
+      window: window,
       frame: frame,
       ignore_unmap: ignore_unmap,
       title_height: title_height,
@@ -45,23 +45,26 @@ impl Client {
 
   fn resize(&self, width: u32, height: u32) {
     self.ws.resize_window(self.frame, width, height);
-    self.ws.resize_window(self.client, width - 10, height - 10 - self.title_height);
+    self.ws.resize_window(self.window, width - 10, height - 10 - self.title_height);
   }
 
-  fn draw(&self) {
-    let text = self.ws.fetch_name(self.client);
+  fn redraw_frame(&self) {
+    let text = self.ws.fetch_name(self.window);
+    let x = 5;
     let y = self.ws.font().map(|ref font| font.ascent).unwrap_or(14);
-    self.ws.draw_string(self.frame, text, 5, y);
+
+    self.ws.clear_window(self.frame);
+    self.ws.draw_string(self.frame, text, x, y);
   }
 
   fn configure(&self) {
-    let (_, curx, cury, curwid, curht, ..) = self.ws.get_geometry(self.client);
+    let (_, curx, cury, curwid, curht, ..) = self.ws.get_geometry(self.window);
     self.ws.move_window(self.frame, curx, cury - self.title_height as i32);
     self.resize(curwid, curht + self.title_height);
   }
 
   fn kill(&self) {
-    self.ws.kill_client(self.client);
+    self.ws.kill_client(self.window);
   }
 
   fn move_in_drag(&self) {
@@ -153,7 +156,7 @@ impl Env {
       match self.ws.next_event() {
         Event::ButtonPress(xlib::XButtonPressedEvent { button, window, .. }) => {
           info!("event: ButtonPress");
-          if let Some(ref client) = self.find_by_frame(window).or(self.find_by_client(window)) {
+          if let Some(ref client) = self.find_client(window) {
             client.handle_button_press(button);
           }
         }
@@ -161,7 +164,7 @@ impl Env {
           info!("event: Expose");
           if count == 0 {
             if let Some(ref client) = self.find_by_frame(window) {
-              client.draw();
+              client.redraw_frame();
             }
           }
         }
@@ -179,8 +182,14 @@ impl Env {
         }
         Event::ConfigureRequest(xlib::XConfigureRequestEvent { window, .. }) => {
           info!("event: ConfigureRequest");
-          if let Some(ref client) = self.find_by_client(window) {
+          if let Some(ref client) = self.find_by_window(window) {
             client.configure();
+          }
+        }
+        Event::PropertyNotify(xlib::XPropertyEvent { window, .. }) => {
+          info!("event: PropertyNotify");
+          if let Some(ref client) = self.find_by_window(window) {
+            client.redraw_frame();
           }
         }
         _ => {
@@ -190,10 +199,15 @@ impl Env {
     }
   }
 
-  fn find_by_client(&self, client: xlib::Window) -> Option<&Client> {
+  fn find_client(&self, window: xlib::Window) -> Option<&Client> {
+    self.find_by_frame(window)
+      .or_else(|| self.find_by_window(window))
+  }
+
+  fn find_by_window(&self, window: xlib::Window) -> Option<&Client> {
     self.clients
       .iter()
-      .find(|&ent| ent.client == client)
+      .find(|&ent| ent.window == window)
   }
 
   fn find_by_frame(&self, frame: xlib::Window) -> Option<&Client> {
@@ -202,16 +216,16 @@ impl Env {
       .find(|&ent| ent.frame == frame)
   }
 
-  fn manage(&mut self, client: xlib::Window, ignore_unmap: bool) {
-    if self.find_by_client(client).is_some() {
+  fn manage(&mut self, window: xlib::Window, ignore_unmap: bool) {
+    if self.find_by_window(window).is_some() {
       return;
     }
-    let client = Client::new(self.ws.clone(), client, self.title_height(), ignore_unmap);
+    let client = Client::new(self.ws.clone(), window, self.title_height(), ignore_unmap);
     self.clients.push(client);
   }
 
-  fn unmanage(&mut self, client: xlib::Window) {
-    let pos = match self.clients.iter().position(|ref entry| entry.client == client) {
+  fn unmanage(&mut self, window: xlib::Window) {
+    let pos = match self.clients.iter().position(|ref entry| entry.window == window) {
       Some(pos) => pos,
       None => return,
     };

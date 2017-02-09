@@ -15,6 +15,7 @@ pub enum Event {
   Unmap(xlib::XUnmapEvent),
   Destroy(xlib::XDestroyWindowEvent),
   ConfigureRequest(xlib::XConfigureRequestEvent),
+  PropertyNotify(xlib::XPropertyEvent),
   Unknown,
 }
 
@@ -188,6 +189,7 @@ impl WindowSystem {
         xlib::UnmapNotify => Event::Unmap(transmute_copy(&ev)),
         xlib::DestroyNotify => Event::Destroy(transmute_copy(&ev)),
         xlib::ConfigureRequest => Event::ConfigureRequest(transmute_copy(&ev)),
+        xlib::PropertyNotify => Event::PropertyNotify(transmute_copy(&ev)),
         _ => Event::Unknown,
       }
     }
@@ -201,7 +203,8 @@ impl WindowSystem {
       attr.border_pixel = self.bd.pixel;
       attr.event_mask = xlib::SubstructureRedirectMask | xlib::SubstructureNotifyMask |
                         xlib::ButtonPressMask | xlib::ButtonReleaseMask |
-                        xlib::ButtonMotionMask | xlib::ExposureMask;
+                        xlib::ButtonMotionMask | xlib::ExposureMask |
+                        xlib::EnterWindowMask;
       let mask = xlib::CWEventMask | xlib::CWBackPixel | xlib::CWBorderPixel |
                  xlib::CWOverrideRedirect;
       xlib::XCreateWindow(self.display,
@@ -252,6 +255,12 @@ impl WindowSystem {
   pub fn destroy_window(&self, win: xlib::Window) {
     unsafe {
       xlib::XDestroyWindow(self.display, win);
+    }
+  }
+
+  pub fn clear_window(&self, win: xlib::Window) {
+    unsafe {
+      xlib::XClearWindow(self.display, win);
     }
   }
 
