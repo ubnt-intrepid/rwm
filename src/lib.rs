@@ -10,9 +10,9 @@ mod backend;
 mod env;
 
 pub fn run() -> Result<(), &'static str> {
-  let mut env = env::Env::new("")?;
-  env.scan_wins()?;
+    let mut env = env::Env::new("")?;
+    env.scan_wins()?;
 
-  trace!("starting main loop...");
-  env.handle_event()
+    trace!("starting main loop...");
+    env.handle_event()
 }

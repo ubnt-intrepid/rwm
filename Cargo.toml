@@ -1,11 +1,12 @@
 [package]
 name = "rwm"
 version = "0.0.0"
+edition = "2018"
 description = "A tiny window manager written in Rust"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 
 [dependencies]
-x11 = "*"
-libc = "*"
-log = "0.3"
-env_logger = "0.3"
+x11 = "2.18.1"
+libc = "0.2.60"
+log = "0.4.7"
+env_logger = "0.6.2"
